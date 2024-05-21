@@ -986,6 +986,50 @@ get_current_settings_ready (QmiClientWds *client,
             g_print ("             Domains: none\n");
     }
 
+    if (qmi_message_wds_get_current_settings_output_get_pcscf_domain_name_list( output, &array, &error)) {
+        GString *s = NULL;
+
+        if (array) {
+            for (i = 0; i < array->len; i++) {
+                if (!s)
+                    s = g_string_new ("");
+                else
+                    g_string_append (s, ", ");
+                g_string_append (s, g_array_index (array, const gchar *, i));
+            }
+        }
+        if (s) {
+            g_print ("             PCSCF domains: %s\n", s->str);
+            g_string_free (s, TRUE);
+        } else
+            g_print ("             PCSCF domains: none\n");
+    }
+
+    if (qmi_message_wds_get_current_settings_output_get_pcscf_server_address_list(output, &array, &error)) {
+        GString *s = NULL;
+
+        if (array) {
+            for (i = 0; i < array->len; i++) {
+                if (!s)
+                    s = g_string_new ("");
+                else
+                    g_string_append (s, ", ");
+
+                in_addr_val.s_addr = GUINT32_TO_BE (g_array_index (array, guint32, i));
+                memset (buf4, 0, sizeof (buf4));
+                inet_ntop (AF_INET, &in_addr_val, buf4, sizeof (buf4));
+                g_print ("IPv4 gateway address: %s\n", buf4);
+                g_string_append (s, buf4);
+            }
+        }
+        if (s) {
+            g_print ("             PCSCF server addresses: %s\n", s->str);
+            g_string_free (s, TRUE);
+        } else
+            g_print ("             PCSCF server addresses: none\n");
+
+    }
+
     qmi_message_wds_get_current_settings_output_unref (output);
     operation_shutdown (TRUE);
 }
@@ -1386,6 +1430,10 @@ typedef struct {
     gboolean              no_roaming_set;
     gboolean              disabled;
     gboolean              disabled_set;
+    gboolean              pcscf_pco;
+    gboolean              pcscf_pco_set;
+    gboolean              pcscf_dhcp;
+    gboolean              pcscf_dhcp_set;
 } CreateModifyProfileProperties;
 
 static gboolean
@@ -1507,6 +1555,32 @@ create_modify_profile_properties_handle (const gchar  *key,
         return TRUE;
     }
 
+    if (g_ascii_strcasecmp (key, "pcscf_pco") == 0 && !props->pcscf_pco_set) {
+        if (!qmicli_read_yes_no_from_string (value, &(props->pcscf_pco))) {
+            g_set_error (error,
+                         QMI_CORE_ERROR,
+                         QMI_CORE_ERROR_FAILED,
+                         "unknown 'pcscf_pco' value '%s'",
+                         value);
+            return FALSE;
+        }
+        props->pcscf_pco_set = TRUE;
+        return TRUE;
+    }
+
+    if (g_ascii_strcasecmp (key, "pcscf_dhcp") == 0 && !props->pcscf_dhcp_set) {
+        if (!qmicli_read_yes_no_from_string (value, &(props->pcscf_dhcp))) {
+            g_set_error (error,
+                         QMI_CORE_ERROR,
+                         QMI_CORE_ERROR_FAILED,
+                         "unknown 'pcscf_dhcp' value '%s'",
+                         value);
+            return FALSE;
+        }
+        props->pcscf_dhcp_set = TRUE;
+        return TRUE;
+    }
+
     g_set_error (error,
                  QMI_CORE_ERROR,
                  QMI_CORE_ERROR_FAILED,
@@ -1605,6 +1679,12 @@ create_profile_input_create (const gchar                      *str,
 
     if (props.disabled_set)
         qmi_message_wds_create_profile_input_set_apn_disabled_flag (*input, props.disabled, NULL);
+
+    if (props.pcscf_pco_set)
+        qmi_message_wds_create_profile_input_set_pcscf_address_using_pco(*input, props.pcscf_pco, NULL);
+
+    if (props.pcscf_dhcp_set)
+        qmi_message_wds_create_profile_input_set_pcscf_address_using_dhcp(*input, props.pcscf_dhcp, NULL);
 
     success = TRUE;
 
@@ -1922,6 +2002,12 @@ modify_profile_input_create (const gchar                      *str,
     if (props.disabled_set)
         qmi_message_wds_modify_profile_input_set_apn_disabled_flag (*input, props.disabled, NULL);
 
+    if (props.pcscf_pco_set)
+        qmi_message_wds_modify_profile_input_set_pcscf_address_using_pco(*input, props.pcscf_pco, NULL);
+
+    if (props.pcscf_dhcp_set)
+        qmi_message_wds_modify_profile_input_set_pcscf_address_using_dhcp(*input, props.pcscf_dhcp, NULL);
+
     success = TRUE;
 
 out:
@@ -2095,6 +2181,13 @@ get_profile_settings_ready (QmiClientWds *client,
             g_print ("\t\tNo roaming: '%s'\n", flag ? "yes" : "no");
         if (qmi_message_wds_get_profile_settings_output_get_apn_disabled_flag (output, &flag, NULL))
             g_print ("\t\tAPN disabled: '%s'\n", flag ? "yes" : "no");
+
+       if (qmi_message_wds_get_profile_settings_output_get_pcscf_address_using_pco(output, &flag, NULL))
+            g_print ("\t\tPCSCF address using PCO: '%s'\n", flag ? "yes" : "no");
+
+       if (qmi_message_wds_get_profile_settings_output_get_pcscf_address_using_dhcp(output, &flag, NULL))
+            g_print ("\t\tPCSCF address using DHCP: '%s'\n", flag ? "yes" : "no");
+
         qmi_message_wds_get_profile_settings_output_unref (output);
     }
 
@@ -3237,7 +3330,10 @@ qmicli_wds_run (QmiDevice *device,
              QMI_WDS_REQUESTED_SETTINGS_GATEWAY_INFO     |
              QMI_WDS_REQUESTED_SETTINGS_MTU              |
              QMI_WDS_REQUESTED_SETTINGS_DOMAIN_NAME_LIST |
-             QMI_WDS_REQUESTED_SETTINGS_IP_FAMILY),
+             QMI_WDS_REQUESTED_SETTINGS_IP_FAMILY        |
+             QMI_WDS_REQUESTED_SETTINGS_PCSCF_DOMAIN_NAME_LIST |
+             QMI_WDS_REQUESTED_SETTINGS_PCSCF_SERVER_ADDRESS_LIST |
+             QMI_WDS_REQUESTED_SETTINGS_PCSCF_ADDRESS),
             NULL);
 
         g_debug ("Asynchronously getting current settings...");
